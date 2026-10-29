@@ -21,7 +21,7 @@ class ScheduleRequest(BaseModel):
 
 @app.get("/")
 def health():
-    return {"status": "online", "engine": "ASMO Low-Memory Engine Active"}
+    return {"status": "online", "engine": "ASMO Multi-Platform Reel Engine Active"}
 
 def process_and_publish_video(req: ScheduleRequest):
     clip_id = f"clip_{int(time.time())}"
@@ -29,7 +29,7 @@ def process_and_publish_video(req: ScheduleRequest):
     final_video = f"clips/{clip_id}_916.mp4"
 
     try:
-        # 1. Download lightweight 480p stream highlight (takes < 30MB RAM)
+        # 1. Download stream clip with mobile user-agent
         print(f"Downloading stream highlight from {req.source_url}...")
         download_cmd = [
             "yt-dlp",
@@ -55,7 +55,7 @@ def process_and_publish_video(req: ScheduleRequest):
             ]
             subprocess.run(fallback_cmd, check=True)
         else:
-            # 2. Ultra Low-Memory 9:16 Vertical Render (< 120MB RAM usage)
+            # 2. Render low-memory 9:16 vertical cut (< 120MB RAM)
             print("Rendering low-memory 9:16 vertical cut with FFmpeg...")
             ffmpeg_cmd = [
                 "ffmpeg", "-y", "-i", raw_video,
@@ -73,28 +73,53 @@ def process_and_publish_video(req: ScheduleRequest):
             ]
             subprocess.run(ffmpeg_cmd, check=True)
 
-        # 3. Public Video Link
+        # 3. Direct Public Video URL
         public_video_url = f"{req.server_base_url}/clips/{clip_id}_916.mp4"
-        print(f"Video created successfully: {public_video_url}")
+        print(f"Video ready at: {public_video_url}")
 
-        # Clean up raw download to keep disk footprint minimal
         if os.path.exists(raw_video):
             os.remove(raw_video)
 
-        # 4. Schedule to Meta (Facebook Page & Instagram Reels)
         scheduled_time = int(time.time()) + 900  # 15 mins in future
-        print(f"Scheduling to Meta Page ID: {req.page_id}...")
 
+        # ----------------------------------------------------
+        # 4A. SCHEDULE AS AN INSTAGRAM REEL (@asmowarlord)
+        # ----------------------------------------------------
+        print("Finding Instagram Business Account ID...")
+        page_info_res = requests.get(
+            f"https://graph.facebook.com/v19.0/{req.page_id}?fields=instagram_business_account&access_token={req.page_token}"
+        )
+        page_data = page_info_res.json()
+        ig_user_id = page_data.get("instagram_business_account", {}).get("id")
+
+        if ig_user_id:
+            print(f"Scheduling Instagram Reel to IG Account ID: {ig_user_id}...")
+            ig_container_url = f"https://graph.facebook.com/v19.0/{ig_user_id}/media"
+            ig_payload = {
+                "media_type": "REELS",
+                "video_url": public_video_url,
+                "caption": f"{req.title}\n\n{req.caption}\n\n#reels #gaming",
+                "share_to_feed": "true",
+                "access_token": req.page_token
+            }
+            ig_res = requests.post(ig_container_url, data=ig_payload)
+            print("Instagram Reels Response:", ig_res.json())
+        else:
+            print("No separate IG ID found, scheduling via Facebook Page Video...")
+
+        # ----------------------------------------------------
+        # 4B. SCHEDULE TO FACEBOOK PAGE (Asmogaming)
+        # ----------------------------------------------------
         meta_url = f"https://graph.facebook.com/v19.0/{req.page_id}/videos"
-        payload = {
+        fb_payload = {
             "file_url": public_video_url,
             "description": f"{req.title}\n\n{req.caption}",
             "published": "false",
             "scheduled_publish_time": str(scheduled_time),
             "access_token": req.page_token
         }
-        res = requests.post(meta_url, data=payload)
-        print("Meta API Response:", res.json())
+        fb_res = requests.post(meta_url, data=fb_payload)
+        print("Facebook Page Response:", fb_res.json())
 
     except Exception as e:
         print(f"Error in video pipeline: {str(e)}")
@@ -104,6 +129,6 @@ def schedule_reel(req: ScheduleRequest, background_tasks: BackgroundTasks):
     background_tasks.add_task(process_and_publish_video, req)
     return {
         "status": "QUEUED",
-        "message": "Video is rendering under low-memory profile and scheduling to Meta!",
-        "estimated_time": "25-45 seconds"
+        "message": "Video is rendering and broadcasting to Instagram Reels and Facebook!",
+        "estimated_time": "30-50 seconds"
     }
